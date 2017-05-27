@@ -2,20 +2,28 @@
 #include <CheapStepper.h>
 #include <DHT.h>
 #include <ArduinoJson.h>
+#include <EEPROM.h>
+#include <Timer.h>
 
 #define DHT_TYPE DHT22
 #define DHT_PIN 2
 #define LED_PIN 13
 #define HEAT_SWITCH_PIN 4
 #define LIGHT_SWITCH_PIN 5
-#define OPTIMAL_TEMPERATURE 37.7f
+#define OPTIMAL_TEMPERATURE 37.2f
+#define TURNER_BACK_MEMORY_ADDRESS 256
+#define TURNER_INTERVAL 10800000
+#define CHECK_INTERVAL 10000
+#define TURNER_DEGREES_DISTANCE 130
+
+Timer t;
 
 DHT dht(DHT_PIN, DHT_TYPE);
 float temperature = 0.0f;
 float humidity = 0.0f;
 
 CheapStepper stepper (8,9,10,11);  
-bool moveClockwise = true;
+bool turnerBack = true;
 
 void setupHeater()
 {
@@ -25,21 +33,18 @@ void setupHeater()
   digitalWrite(LIGHT_SWITCH_PIN, HIGH);
 }
 
-void setupStepper()
+void moveTurner()
 {
-  stepper.setRpm(12);
-  stepper.newMoveTo(moveClockwise, 2048);
+  turnerBack = !turnerBack; // reverse direction
+  EEPROM.put(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
+  stepper.moveDegrees(turnerBack, TURNER_DEGREES_DISTANCE); 
 }
 
-void moveStepper()
+void setupTurner()
 {
-  stepper.run();
-  int stepsLeft = stepper.getStepsLeft();
-
-  if (stepsLeft == 0){
-    moveClockwise = !moveClockwise; // reverse direction
-    stepper.newMoveDegrees (moveClockwise, 180); // move 180 degrees from current position
-  }
+  stepper.setRpm(14);
+  EEPROM.get(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
+  t.every(TURNER_INTERVAL, moveTurner);
 }
 
 void setupSensor() 
@@ -62,17 +67,9 @@ void publishStats()
   data["temperature"] = temperature;
   data["humidity"] = humidity;
   data["runtime"] = millis();
+  data["turner"] = turnerBack ? "back" : "forward";
   data.printTo(Serial);
   Serial.println();
-}
-
-void setup()
-{
-  Serial.begin(9600);
-  Serial.println("Starting up");
-  setupSensor();
-  //setupStepper();
-  setupHeater();
 }
 
 void handleHeat()
@@ -86,11 +83,24 @@ void handleHeat()
   }
 }
 
-void loop()
+void check() 
 {
   readSensor();
-  //moveStepper();
   handleHeat();
   publishStats();
-  delay(10000);
+}
+
+void setup()
+{
+  Serial.begin(9600);
+  Serial.println("Starting up");
+  setupSensor();
+  setupTurner();
+  setupHeater();
+  t.every(CHECK_INTERVAL, check);
+}
+
+void loop()
+{
+  t.update();
 }
