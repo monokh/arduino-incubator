@@ -23,7 +23,8 @@
 
 #define HEAT_SWITCH_PIN 4
 #define LIGHT_SWITCH_PIN 5
-#define OPTIMAL_TEMPERATURE 37.4f
+#define MINIMUM_TEMPERATURE 37.2f
+#define MAXIMUM_TEMPERATURE 37.3f
 #define CHECK_INTERVAL 10000
 
 #define TURNER_BACK_MEMORY_ADDRESS 256
@@ -119,12 +120,13 @@ void switchLight()
 
 void handleHeat()
 {
-  if (temperature < OPTIMAL_TEMPERATURE) {
+  if (temperature <= MINIMUM_TEMPERATURE) {
     digitalWrite(HEAT_SWITCH_PIN, HIGH);
     if(enableLight) {
       turnOnLight();
     }
-  } else {
+  }
+  else if (temperature >= MAXIMUM_TEMPERATURE) {
     digitalWrite(HEAT_SWITCH_PIN, LOW);
     turnOffLight();
   }
