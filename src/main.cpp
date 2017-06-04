@@ -23,8 +23,8 @@
 
 #define HEAT_SWITCH_PIN 4
 #define LIGHT_SWITCH_PIN 5
-#define MINIMUM_TEMPERATURE 37.2f
-#define MAXIMUM_TEMPERATURE 37.3f
+#define MINIMUM_TEMPERATURE 37.1f
+#define MAXIMUM_TEMPERATURE 37.1f
 #define CHECK_INTERVAL 10000
 
 #define TURNER_BACK_MEMORY_ADDRESS 256
@@ -37,7 +37,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 float temperature = 0.0f;
 float humidity = 0.0f;
 boolean lightOn = false;
-boolean enableLight = false;
+boolean enableLight = true;
 
 CheapStepper turner;
 bool turnerBack = true;
@@ -126,7 +126,7 @@ void handleHeat()
       turnOnLight();
     }
   }
-  else if (temperature >= MAXIMUM_TEMPERATURE) {
+  else if (temperature > MAXIMUM_TEMPERATURE) {
     digitalWrite(HEAT_SWITCH_PIN, LOW);
     turnOffLight();
   }
