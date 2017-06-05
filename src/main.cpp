@@ -11,6 +11,7 @@
 #define IR_READ_INTERVAL 500
 #define IR_BLANK_CODE 4294967295
 #define IR_ENABLE_LIGHT_CODE 16769565
+#define IR_ENABLE_TURNER_CODE 16769055
 #define IR_SWITCH_LIGHT_CODE 16753245
 #define IR_MOVE_TURNER_FORWARD_CODE 16761405
 #define IR_MOVE_TURNER_BACKWARD_CODE 16712445
@@ -27,6 +28,7 @@
 #define MAXIMUM_TEMPERATURE 37.1f
 #define CHECK_INTERVAL 10000
 
+#define TURNER_ENABLED_MEMORY_ADDRESS 240
 #define TURNER_BACK_MEMORY_ADDRESS 256
 #define TURNER_INTERVAL 3600000
 #define TURNER_DEGREES_DISTANCE 180
@@ -41,6 +43,7 @@ boolean enableLight = true;
 
 CheapStepper turner;
 bool turnerBack = true;
+bool turnerEnabled = true;
 
 IRrecv irrecv(IR_PIN);
 decode_results IRResult;
@@ -61,15 +64,18 @@ void setupHeater()
 
 void moveTurner()
 {
-  turnerBack = !turnerBack; // reverse direction
-  EEPROM.put(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
-  turner.moveDegrees(turnerBack, TURNER_DEGREES_DISTANCE); 
+  if(turnerEnabled) {
+    turnerBack = !turnerBack; // reverse direction
+    EEPROM.put(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
+    turner.moveDegrees(turnerBack, TURNER_DEGREES_DISTANCE); 
+  }
 }
 
 void setupTurner()
 {
   turner = CheapStepper(8,9,10,11);
   turner.setRpm(12);
+  EEPROM.get(TURNER_ENABLED_MEMORY_ADDRESS, turnerEnabled);
   EEPROM.get(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
   t.every(TURNER_INTERVAL, moveTurner);
 }
@@ -96,6 +102,7 @@ void publishStats()
   data["runtime"] = millis();
   data["turner"] = turnerBack ? 0 : 1;
   data["light_enabled"] = enableLight ? 1 : 0;
+  data["turner_enabled"] = turnerEnabled ? 1 : 0;
   data.printTo(Serial);
   Serial.println();
 }
@@ -141,7 +148,11 @@ void handleCommand(unsigned long command)
     enableLight = !enableLight;
     turnOffLight();
   }
-  if(command == IR_SWITCH_LIGHT_CODE) {
+  else if(command == IR_ENABLE_TURNER_CODE) {
+    turnerEnabled = !turnerEnabled;
+    EEPROM.put(TURNER_ENABLED_MEMORY_ADDRESS, turnerEnabled);
+  }
+  else if(command == IR_SWITCH_LIGHT_CODE) {
     switchLight();
   }
   else if (command == IR_TURNER_CODE) {
