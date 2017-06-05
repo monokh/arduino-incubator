@@ -24,8 +24,9 @@
 
 #define HEAT_SWITCH_PIN 4
 #define LIGHT_SWITCH_PIN 5
-#define MINIMUM_TEMPERATURE 37.1f
-#define MAXIMUM_TEMPERATURE 37.1f
+#define LIGHT_ENABLED_MEMORY_ADDRESS 224
+#define MINIMUM_TEMPERATURE 37.2f
+#define MAXIMUM_TEMPERATURE 37.2f
 #define CHECK_INTERVAL 10000
 
 #define TURNER_ENABLED_MEMORY_ADDRESS 240
@@ -38,8 +39,8 @@ Timer t;
 DHT dht(DHT_PIN, DHT_TYPE);
 float temperature = 0.0f;
 float humidity = 0.0f;
-boolean lightOn = false;
-boolean enableLight = true;
+bool lightOn = false;
+bool lightEnabled = true;
 
 CheapStepper turner;
 bool turnerBack = true;
@@ -55,6 +56,7 @@ void setupIR()
 
 void setupHeater()
 {
+  EEPROM.get(LIGHT_ENABLED_MEMORY_ADDRESS, lightEnabled);
   pinMode(HEAT_SWITCH_PIN, OUTPUT);
   digitalWrite(HEAT_SWITCH_PIN, LOW);
   pinMode(LIGHT_SWITCH_PIN, OUTPUT);
@@ -101,7 +103,7 @@ void publishStats()
   data["humidity"] = humidity;
   data["runtime"] = millis();
   data["turner"] = turnerBack ? 0 : 1;
-  data["light_enabled"] = enableLight ? 1 : 0;
+  data["light_enabled"] = lightEnabled ? 1 : 0;
   data["turner_enabled"] = turnerEnabled ? 1 : 0;
   data.printTo(Serial);
   Serial.println();
@@ -129,7 +131,7 @@ void handleHeat()
 {
   if (temperature <= MINIMUM_TEMPERATURE) {
     digitalWrite(HEAT_SWITCH_PIN, HIGH);
-    if(enableLight) {
+    if(lightEnabled) {
       turnOnLight();
     }
   }
@@ -145,7 +147,8 @@ void handleCommand(unsigned long command)
     return;
     
   if(command == IR_ENABLE_LIGHT_CODE) {
-    enableLight = !enableLight;
+    lightEnabled = !lightEnabled;
+    EEPROM.put(LIGHT_ENABLED_MEMORY_ADDRESS, lightEnabled);
     turnOffLight();
   }
   else if(command == IR_ENABLE_TURNER_CODE) {
@@ -186,10 +189,18 @@ void check()
   publishStats();
 }
 
+void setupMemory() // RUN ONLY ONCE THE FIRST TIME CODE IS DEPLOYED
+{
+  EEPROM.put(LIGHT_ENABLED_MEMORY_ADDRESS, lightEnabled);
+  EEPROM.put(TURNER_ENABLED_MEMORY_ADDRESS, turnerEnabled);
+  EEPROM.put(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
+}
+
 void setup()
 {
   Serial.begin(9600);
   Serial.println("Starting up");
+  // setupMemory(); RUN ONLY ONCE THE FIRST TIME CODE IS DEPLOYED
   setupSensor();
   setupTurner();
   setupHeater();
