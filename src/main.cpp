@@ -1,39 +1,45 @@
 #include <Arduino.h>
-#include <CheapStepper.h>
+#include <SevSeg.h>
 #include <DHT.h>
-#include <ArduinoJson.h>
 #include <EEPROM.h>
 #include <IRremote.h>
 #include <Timer.h>
 #include <math.h>
 
-#define IR_PIN 7
+#define IR_PIN A4
 #define IR_READ_INTERVAL 500
-#define IR_BLANK_CODE 4294967295
-#define IR_ENABLE_LIGHT_CODE 16769565
-#define IR_ENABLE_TURNER_CODE 16769055
-#define IR_SWITCH_LIGHT_CODE 16753245
-#define IR_MOVE_TURNER_FORWARD_CODE 16761405
-#define IR_MOVE_TURNER_BACKWARD_CODE 16712445
-#define IR_TURNER_CODE 16720605
+#define IR_BLANK_CODE 4294967295 // ???
+#define IR_TOGGLE_MODE_COMMAND 70
 
 #define DHT_TYPE DHT22
-#define DHT_PIN 2
+#define DHT_PIN A1
 
-#define LED_PIN 13
+#define DISPLAY_NUM_DIGITS 4
+#define DISPLAY_DIGIT_PINS \
+  {                        \
+    2, 3, 4, 5             \
+  }
+#define DISPLAY_SEGMENTS_PINS  \
+  {                            \
+    6, 7, 8, 9, 10, 11, 12, 13 \
+  }
+#define DISPLAY_COMMON_TYPE COMMON_CATHODE
+#define DISPLAY_BRIGHTNESS 10
+#define DISPLAY_MODE_TEMPERATURE 1
 
-#define HEAT_SWITCH_PIN 4
-#define LIGHT_SWITCH_PIN 5
-#define LIGHT_ENABLED_MEMORY_ADDRESS 224
+#define HEAT_SWITCH_PIN A2
+#define LIGHT_SWITCH_PIN A3
 #define MINIMUM_TEMPERATURE 37.5f
 #define MAXIMUM_TEMPERATURE 37.5f
 #define CHECK_INTERVAL 10000
 
-#define TURNER_ENABLED_MEMORY_ADDRESS 240
-#define TURNER_BACK_MEMORY_ADDRESS 256
-#define TURNER_INTERVAL 3600000
-#define TURNER_DEGREES_DISTANCE 180
+enum DisplayMode
+{
+  Temperature,
+  Humidity
+};
 
+SevSeg sevseg; //Instantiate a seven segment object
 Timer t;
 
 DHT dht(DHT_PIN, DHT_TYPE);
@@ -41,22 +47,15 @@ float temperature = 0.0f;
 float humidity = 0.0f;
 bool lightOn = false;
 bool lightEnabled = true;
-
-CheapStepper turner;
-bool turnerBack = true;
-bool turnerEnabled = true;
-
-IRrecv irrecv(IR_PIN);
-decode_results IRResult;
+bool displayMode = DisplayMode::Temperature;
 
 void setupIR()
 {
-  irrecv.enableIRIn();
+  IrReceiver.begin(IR_PIN, false);
 }
 
 void setupHeater()
 {
-  EEPROM.get(LIGHT_ENABLED_MEMORY_ADDRESS, lightEnabled);
   pinMode(HEAT_SWITCH_PIN, OUTPUT);
   digitalWrite(HEAT_SWITCH_PIN, LOW);
   pinMode(LIGHT_SWITCH_PIN, OUTPUT);
@@ -64,29 +63,31 @@ void setupHeater()
   lightOn = false;
 }
 
-void moveTurner()
-{
-  if(turnerEnabled) {
-    turnerBack = !turnerBack; // reverse direction
-    EEPROM.put(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
-    turner.moveDegrees(turnerBack, TURNER_DEGREES_DISTANCE); 
-  }
-}
-
-void setupTurner()
-{
-  turner = CheapStepper(8,9,10,11);
-  turner.setRpm(12);
-  EEPROM.get(TURNER_ENABLED_MEMORY_ADDRESS, turnerEnabled);
-  EEPROM.get(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
-  t.every(TURNER_INTERVAL, moveTurner);
-}
-
-void setupSensor() 
+void setupSensor()
 {
   dht.begin();
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+}
+
+void setupDisplay()
+{
+  byte digitPins[] = DISPLAY_DIGIT_PINS;
+  byte segmentPins[] = DISPLAY_SEGMENTS_PINS;
+  sevseg.begin(DISPLAY_COMMON_TYPE, DISPLAY_NUM_DIGITS, digitPins, segmentPins);
+  sevseg.setBrightness(DISPLAY_BRIGHTNESS);
+}
+
+void writeDisplay() {
+  char buf[5];
+  if (displayMode == DisplayMode::Temperature)
+  {
+    String(temperature, 2).toCharArray(buf, 10);
+    buf[4] = 'C';
+  } else if (displayMode == DisplayMode::Humidity) {
+    String(humidity, 2).toCharArray(buf, 10);
+    buf[4] = 'P';
+  }
+  sevseg.setChars(buf);
+  sevseg.refreshDisplay();
 }
 
 void readSensor()
@@ -95,21 +96,7 @@ void readSensor()
   humidity = dht.readHumidity();
 }
 
-void publishStats()
-{
-  StaticJsonBuffer<200> json;
-  JsonObject& data = json.createObject();
-  data["temperature"] = temperature;
-  data["humidity"] = humidity;
-  data["runtime"] = millis();
-  data["turner"] = turnerBack ? 0 : 1;
-  data["light_enabled"] = lightEnabled ? 1 : 0;
-  data["turner_enabled"] = turnerEnabled ? 1 : 0;
-  data.printTo(Serial);
-  Serial.println();
-}
-
-void turnOffLight() 
+void turnOffLight()
 {
   lightOn = false;
   digitalWrite(LIGHT_SWITCH_PIN, HIGH);
@@ -121,21 +108,18 @@ void turnOnLight()
   digitalWrite(LIGHT_SWITCH_PIN, LOW);
 }
 
-void switchLight() 
-{
-  lightOn = !lightOn;
-  digitalWrite(LIGHT_SWITCH_PIN, lightOn ? LOW : HIGH);
-}
-
 void handleHeat()
 {
-  if (temperature <= MINIMUM_TEMPERATURE) {
+  if (temperature <= MINIMUM_TEMPERATURE)
+  {
     digitalWrite(HEAT_SWITCH_PIN, HIGH);
-    if(lightEnabled) {
+    if (lightEnabled)
+    {
       turnOnLight();
     }
   }
-  else if (temperature > MAXIMUM_TEMPERATURE) {
+  else if (temperature > MAXIMUM_TEMPERATURE)
+  {
     digitalWrite(HEAT_SWITCH_PIN, LOW);
     turnOffLight();
   }
@@ -143,31 +127,13 @@ void handleHeat()
 
 void handleCommand(unsigned long command)
 {
-  if(command == IR_BLANK_CODE)
+  if (command == IR_BLANK_CODE)
     return;
-    
-  if(command == IR_ENABLE_LIGHT_CODE) {
-    lightEnabled = !lightEnabled;
-    EEPROM.put(LIGHT_ENABLED_MEMORY_ADDRESS, lightEnabled);
-    turnOffLight();
-  }
-  else if(command == IR_ENABLE_TURNER_CODE) {
-    turnerEnabled = !turnerEnabled;
-    EEPROM.put(TURNER_ENABLED_MEMORY_ADDRESS, turnerEnabled);
-  }
-  else if(command == IR_SWITCH_LIGHT_CODE) {
-    switchLight();
-  }
-  else if (command == IR_TURNER_CODE) {
-    moveTurner();
-  }
-  else if (command == IR_MOVE_TURNER_FORWARD_CODE) {
-    turner.moveDegrees(false, 5); 
-  }
-  else if (command == IR_MOVE_TURNER_BACKWARD_CODE) {
-    turner.moveDegrees(true, 5);
-  }
-  else {
+
+  if (command == IR_TOGGLE_MODE_COMMAND)
+  {
+    displayMode = displayMode == DisplayMode::Temperature ? DisplayMode::Humidity : DisplayMode::Temperature;
+  } else {
     Serial.print("Received unknown command: ");
     Serial.print(command);
     Serial.println();
@@ -176,24 +142,21 @@ void handleCommand(unsigned long command)
 
 void readIR()
 {
-  if (irrecv.decode(&IRResult)) {
-    handleCommand(IRResult.value);
-    irrecv.resume(); 
+  if (IrReceiver.decode())
+  {
+    handleCommand(IrReceiver.decodedIRData.command);
+    IrReceiver.resume();
   }
 }
 
-void check() 
+void check()
 {
   readSensor();
   handleHeat();
-  publishStats();
 }
 
 void setupMemory() // RUN ONLY ONCE THE FIRST TIME CODE IS DEPLOYED
 {
-  EEPROM.put(LIGHT_ENABLED_MEMORY_ADDRESS, lightEnabled);
-  EEPROM.put(TURNER_ENABLED_MEMORY_ADDRESS, turnerEnabled);
-  EEPROM.put(TURNER_BACK_MEMORY_ADDRESS, turnerBack);
 }
 
 void setup()
@@ -202,14 +165,15 @@ void setup()
   Serial.println("Starting up");
   // setupMemory(); RUN ONLY ONCE THE FIRST TIME CODE IS DEPLOYED
   setupSensor();
-  setupTurner();
   setupHeater();
   setupIR();
+  setupDisplay();
   t.every(CHECK_INTERVAL, check);
   t.every(IR_READ_INTERVAL, readIR);
 }
 
 void loop()
 {
+  writeDisplay();
   t.update();
 }
